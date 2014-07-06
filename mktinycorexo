@@ -41,7 +41,7 @@ AUTHORS="quozl@laptop.org mavrothal@yahoo.com jerry@laptop.org.au"
 DEVICE=
 
 # your wireless network
-ESSID=lekol
+ESSID=
 
 # whether to pause for inspection
 INSPECT=no
