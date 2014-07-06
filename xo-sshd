@@ -1,0 +1,18 @@
+#!/bin/sh
+# turn on sshd
+
+mount /dev/sda1 /mnt/sda1
+cp /dev/sda1/scripts/wifi.db /home/tc
+
+# Assume AP does not need password
+wifi.sh -a
+
+su -c 'tce-load -wi openssh' tc
+cd /usr/local/etc/ssh && cp sshd_config.example sshd_config
+/usr/local/etc/init.d/openssh start
+
+#	wait for new host keys to be generated,
+#change the password for the user tc:
+passwd tc
+#	find the IP address of the laptop:
+ifconfig
