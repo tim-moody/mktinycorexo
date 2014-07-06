@@ -41,13 +41,13 @@ AUTHORS="quozl@laptop.org mavrothal@yahoo.com jerry@laptop.org.au"
 DEVICE=
 
 # your wireless network
-ESSID=
+ESSID=lekol
 
 # whether to pause for inspection
 INSPECT=no
 
 # whether to use colour in output
-COLOUR=no
+COLOUR=yes
 
 # setup customisation stick
 CUSTOM=no
@@ -849,7 +849,7 @@ p_end "ok"
 p_begin "Modifying initrd - add OLPC XO specific scripts ... "
 for x in ${TREE_X86} ${TREE_ARM}; do
     if [ -d $x ]; then
-        cp xo-{backup,restore,server,revert,custom} ${x}/usr/local/bin/
+        cp xo-{backup,restore,server,revert,custom,script,sshd} ${x}/usr/local/bin/
     fi
 done
 p_end "ok"
