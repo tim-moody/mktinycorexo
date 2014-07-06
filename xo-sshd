@@ -2,7 +2,7 @@
 # turn on sshd
 
 mount /dev/sda1 /mnt/sda1
-cp /dev/sda1/scripts/wifi.db /home/tc
+cp /mnt/sda1/scripts/wifi.db /home/tc
 
 # Assume AP does not need password
 wifi.sh -a
