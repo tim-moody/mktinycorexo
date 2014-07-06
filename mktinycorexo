@@ -1,0 +1,1209 @@
+#!/bin/bash
+set -e
+#
+# Tiny Core Linux target system builder for OLPC XO laptops
+# Copyright (C) 2011  James Cameron (quozl@laptop.org)
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+#
+# Modified by mavrothal@yahoo.com for TC 4.x, OLPC 13.2.0 kernels
+# and all 4 XO models.  May 2013
+#
+# Modified by jerry@laptop.org.au to add customisation stick mode.
+# June 2013.
+#
+
+# version of this script
+VERSION=2014-06-17
+
+# authors
+AUTHORS="quozl@laptop.org mavrothal@yahoo.com jerry@laptop.org.au"
+
+
+# your local defaults
+# may be overidden with ~/.mktinycorexo
+
+# the block device to create the partition on
+# (ignored if it does not exist)
+DEVICE=
+
+# your wireless network
+ESSID=
+
+# whether to pause for inspection
+INSPECT=no
+
+# whether to use colour in output
+COLOUR=no
+
+# setup customisation stick
+CUSTOM=no
+BUNDLES=
+
+# create .zd file
+ZD=no
+
+# option defaults
+
+# use a local cache of upstream files on your build system
+# (--cache turns this on and does not verify cache against upstream
+# eliminating network use)
+CACHE=no
+
+# where to put packages
+TCZLOC=initrd
+
+# support XO-1, XO-1.5, XO-1.75 and XO-4
+C=yes  # XO-1
+D=yes  # XO-1.5
+E=yes  # XO-1.75
+F=yes  # XO-4
+
+# include a GUI
+GUI=no
+
+# upstream versions, tiny core linux
+
+CORE_VERSION=4.x
+
+# tinycore initramfs name
+CORE_INITRD_X86=core
+CORE_INITRD_ARM=piCore
+CORE_INITRD_ARM_ARCH=armv6
+CORE_FALLBACK_ARM_ARCH=armv7
+
+
+# upstream versions, one laptop per child
+
+# the build from which to obtain matching kernel, modules and firmware
+# (corresponds to an rsync module name on rsync://updates.laptop.org/)
+C_BUILD=build-13.2.0_xo1-13
+D_BUILD=build-13.2.0_xo1.5-13
+E_BUILD=build-13.2.0_xo1.75-13
+F_BUILD=build-13.2.0_xo4-13
+
+# kernel bundle
+C_KERNEL=runos0.zip
+D_KERNEL=runos1.zip
+E_KERNEL=runos2.zip
+F_KERNEL=runos4.zip
+
+# open firmware bundle
+C_FIRMWARE=bootfw0.zip
+D_FIRMWARE=bootfw1.zip
+E_FIRMWARE=bootfw2.zip
+F_FIRMWARE=bootfw4.zip
+
+# the kernel version string in that build
+# see uname --release, or packages.txt in build output directory
+C_MODULES=3.3.8_xo1-20130329.1530.olpc.c0f817d
+D_MODULES=3.3.8_xo1.5-20130525.1036.olpc.f12d9e6
+E_MODULES=3.0.19_xo1.75-20130520.1930.olpc.0b6118b
+F_MODULES=3.5.7_xo4-20130705.0203.olpc.e77de3d
+
+# additional kernel options
+# see http://wiki.tinycorelinux.com/tiki-index.php?page=Boot+Options
+# fbcon=font:SUN12x22, the same console font as the OLPC builds
+# superuser, boots to a root shell
+# quiet, reduces verbosity during boot
+# showapps, show TCX extensions as they load
+# multivt, start multiple consoles
+# nozswap, do not use zram swap (because OLPC kernels do not have it)
+# cde, use extensions from cde directory
+# lst=, name of file with extensions (tcz) to be loaded at boot time
+CMDLINE="fbcon=font:SUN12x22 superuser quiet showapps multivt waitusb=5 nozswap console=\${SERIALTERM},115200 console=tty0"
+
+
+# directories
+
+# where to unpack the tiny core initrd tree
+# (must be absolute, is not kept)
+TREE_X86=$(pwd)/tmp/tree.x86.$$
+TREE_ARM=$(pwd)/tmp/tree.arm.$$
+
+# where to create the new tiny core initrd
+# (must be absolute, is not kept)
+INIT_X86=$(pwd)/tmp/initrd.x86.gz.$$
+INIT_ARM=$(pwd)/tmp/initrd.arm.gz.$$
+
+# uppercase variables; considered to be global in scope
+# lowercase variables; considered to be local in scope
+
+if [ -r /etc/mktinycorexo.conf ]; then  . /etc/mktinycorexo.conf;  fi
+if [ -r ~/.mktinycorexo ];        then  . ~/.mktinycorexo;         fi
+if [ -r mktinycorexo.conf ];      then  . mktinycorexo.conf;       fi
+
+function license {
+    cat <<EOF
+Tiny Core Linux target system builder for the OLPC XO, ${VERSION}
+Copyright (C) 2011-2013  James Cameron (quozl@laptop.org)
+
+This program comes with ABSOLUTELY NO WARRANTY; for details see source.
+This is free software, and you are welcome to redistribute it under
+certain conditions; see source for details.
+
+EOF
+}
+
+function usage {
+    cat <<EOF
+$0 [options] [device]
+
+device         optional block device to create boot partition on.
+               (otherwise you must copy output/* to a device yourself)
+--cache        use the local cache previously built without verifying
+               against upstream (eliminates network use)
+--essid id     associate to a wireless network during boot.
+--none         disable all XO support; use before one of the following;
+--add-xo-1     enable XO-1 support,
+--add-xo-1.5   enable XO-1.5 support,
+--add-xo-1.75  enable XO-1.75 support,
+--add-xo-4     enable XO-4 support.
+--tczloc x     where to place packages that are loaded after boot,
+               the options are "initrd" and "device",
+               the default is "initrd".
+--timezone     add timezone information in the format "GMT+H", "GMT-H";
+               subtract if you are East of the prime meridian
+               (Greenwich, UK), add if you are West of it.
+--with-X       build also a GUI (login as user "tc" to activate);
+               TCZ extensions MUST be included in the initrd
+               for GUI to work properly on the XO-1.75 and the XO-4.
+--xo-custom    add xo-custom boot directive
+--bundles x    URL to download customisation bundles from
+--zd           create a .zd file
+--inspect      pause to allow inspection of the initrd filesystem.
+--colour       displays script messages in colour.
+--version      displays script version.
+--license      displays license.
+--help         displays this what you are looking at, mate.
+EOF
+}
+
+function p_error {
+    if [ "$COLOUR" = "yes" ]; then
+        echo -e "\e[1;91m$1\e[0;39m"
+    else
+        echo "$1"
+    fi
+}
+
+function p_warning {
+    if [ "$COLOUR" = "yes" ]; then
+        echo -e "\e[1;93m$1\e[0;39m"
+    else
+        echo "$1"
+    fi
+}
+
+function p_informational {
+    if [ "$COLOUR" = "yes" ]; then
+        echo -e "\e[1;92m$1\e[0;39m"
+    else
+        echo "$1"
+    fi
+}
+
+function p_begin {
+    if [ "$COLOUR" = "yes" ]; then
+        echo -ne "\e[1;96m$1\e[0;39m"
+    else
+        echo -n "$1"
+    fi
+}
+
+function p_end {
+    if [ "$COLOUR" = "yes" ]; then
+        echo -e "\e[1;92m$1\e[0;39m"
+    else
+        echo "$1"
+    fi
+}
+
+# process options and arguments
+while [ ! -z "${1}" ]; do
+    case "${1}" in
+        --no-xo-1)
+            shift
+            C=no
+            ;;
+        --no-xo-1.5)
+            shift
+            D=no
+            ;;
+        --no-xo-1.75)
+            shift
+            E=no
+            ;;
+        --no-xo-4)
+            shift
+            F=no
+            ;;
+        --none)
+            shift
+            C=no
+            D=no
+            E=no
+            F=no
+            ;;
+        --add-xo-1)
+            shift
+            C=yes
+            ;;
+        --add-xo-1.5)
+            shift
+            D=yes
+            ;;
+        --add-xo-1.75)
+            shift
+            E=yes
+            ;;
+        --add-xo-4)
+            shift
+            F=yes
+            ;;
+        --essid)
+            shift
+            ESSID=${1}
+            if [ "${1}" = "" ] ; then
+                p_error "$0: invalid value for --essid"
+                usage
+                exit 1
+            fi
+            shift
+            ;;
+        --tczloc)
+            shift
+            TCZLOC=${1}
+            if [ "${1}" = "initrd" ] ; then
+                p_informational "Packages will be placed in the initrd"
+            elif [ "${1}" = "device" ] ; then
+                p_informational "Packages will be placed in a directory cde"
+                CMDLINE="$CMDLINE cde lst=XO_\${ARCHITECTURE}.lst"
+            else
+                p_error "$0: invalid value for --tczloc"
+                usage
+                exit 1
+            fi
+            shift
+            ;;
+        --cache)
+            shift
+            CACHE=yes
+            ;;
+        --with-X)
+            shift
+            GUI=yes
+            ;;
+        --timezone)
+            shift
+            TZ=${1}
+            FORMAT=$(echo $TZ | grep GMT[-+][0-9])
+            if [ "${1}" = "" -o "$FORMAT" = "" ] ; then
+                p_error "$0: invalid value for --timezone"
+                usage
+                exit 1
+            else
+                CMDLINE="$CMDLINE tz=$TZ"
+            fi
+            shift
+            ;;
+        --xo-custom)
+            shift
+            CMDLINE="$CMDLINE xo-custom"
+            CUSTOM="yes"
+            ;;
+        --bundles)
+            shift
+            BUNDLES=${1}
+            shift
+            ;;
+        --zd)
+            shift
+            ZD=yes
+            ;;
+        --inspect)
+            shift
+            INSPECT=yes
+            ;;
+        --colour)
+            shift
+            COLOUR=yes
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        --license)
+            license
+            exit 0
+            ;;
+        --version)
+            echo ${VERSION}
+            exit 0
+            ;;
+        *)
+            DEVICE=${1}
+            shift
+            if [ ! -e ${DEVICE} ]; then
+                p_error "$0: no such device ${DEVICE}"
+                usage
+                exit 1
+            fi
+    esac
+done
+
+# check that we have the needed tools
+for x in rsync patch cpio gzip git zcat gunzip; do
+    which $x
+    if [ $? -ne 0 ] ; then
+        echo -e "\\0033[1;34m"
+        echo "Please install $x and run the script again"
+        echo -en "\\0033[0;39m"
+        exit 1
+    fi
+done
+
+# Renaming the TCZs will prohibit install script to run properly
+# Do not build GUI for ARM-XOs if we try to save the TCZs in the boot device
+if [ "${TCZLOC}" = "device" -a "${GUI}" = "yes" ]; then
+    if [ $E = yes -o $F = yes ]; then
+        p_error "To build a GUI for the XO-1.75 or the XO-4"
+        p_error "you MUST include the TCZs in the initrd"
+        sleep 5
+        usage
+        exit 1
+    fi
+fi
+
+license
+
+# build the cache
+mkdir -p cache
+mkdir -p cache/boot
+mkdir -p cache/lib/modules
+mkdir -p cache/lib/firmware
+mkdir -p cache/TCZs_x86/tce/optional
+mkdir -p cache/TCZs_arm/tce/optional
+
+if [ $CACHE = no ]; then
+    p_informational "Ignoring cache."
+fi
+
+function get_initrd {
+    flags="-q -c -P cache/"
+    path=$1/$2
+    file=$3
+    checksum=$file.md5.txt
+
+    if [ ! -f cache/$file ]; then
+        p_begin "Downloading $file ... "
+        wget $flags $path/$file
+        p_end "ok"
+        return
+    fi
+
+    if [ $CACHE = no ]; then
+        p_begin "Checking if $file is up to date ... "
+        wget $flags $path/$checksum
+        if [ "$(cat cache/$checksum | cut -f 1 -d ' ')" \
+            != "$(md5sum cache/$file | cut -f 1 -d ' ')" ]; then
+            p_end "no"
+            rm -f cache/$file
+            p_begin "Downloading $file ... "
+            wget $flags $path/$file
+        fi
+        p_end "ok"
+        rm -f cache/$checksum
+    fi
+}
+
+if [ $C = yes -o $D = yes ]; then
+    get_initrd \
+        http://repo.tinycorelinux.net/${CORE_VERSION} \
+        x86/release/distribution_files \
+        ${CORE_INITRD_X86}.gz
+fi
+
+if [ $E = yes -o $F = yes ]; then
+    get_initrd \
+        http://repo.tinycorelinux.net/${CORE_VERSION} \
+        ${CORE_INITRD_ARM_ARCH} \
+        ${CORE_INITRD_ARM}.gz
+fi
+
+function get_kernel {
+    KERNEL=$1
+    BUILD=$2
+    MODULES=$3
+    FIRMWARE=$4
+    if [ $CACHE = no -o ! -f cache/boot/vmlinuz-${MODULES} ]; then
+        if [ -e /boot/vmlinuz-${MODULES} ]; then
+            p_begin "Copying kernel from this system ... "
+            cp --archive /boot/vmlinuz-${MODULES} cache/boot/
+            p_end "ok"
+        fi
+        p_begin "Downloading kernel ... "
+        rsync --archive --checksum \
+            rsync://updates.laptop.org/${BUILD}/root/boot/${KERNEL} \
+            cache/boot/
+        unzip -p cache/boot/${KERNEL} data.img > cache/boot/vmlinuz-${MODULES}
+        p_end "ok"
+    fi
+    if [ $CACHE = no -o ! -e cache/lib/modules/${MODULES} ]; then
+        if [ -e /lib/modules/${MODULES} ]; then
+            p_begin "Copying modules from this system ... "
+            cp --archive /lib/modules/${MODULES} cache/lib/modules/
+            p_end "ok"
+        fi
+        p_begin "Downloading kernel modules ... "
+        rsync --archive --checksum \
+            rsync://updates.laptop.org/${BUILD}/root/lib/modules/${MODULES} \
+            cache/lib/modules/
+        p_end "ok"
+    fi
+    if [ $CACHE = no -o ! -e cache/boot/${FIRMWARE} ]; then
+        if [ -e /boot/${FIRMWARE} ]; then
+            p_begin "Copying firmware from this system ... "
+            cp --archive /boot/${FIRMWARE} cache/boot/
+            p_end "ok"
+        fi
+        p_begin "Downloading firmware ... "
+        rsync --archive --checksum \
+            rsync://updates.laptop.org/${BUILD}/root/boot/${FIRMWARE} \
+            cache/boot/
+        p_end "ok"
+    fi
+}
+
+function get_wireless_firmware {
+    DN=$(dirname $1)
+    if [ $CACHE = no -o ! -e cache/lib/firmware/${1} ]; then
+        mkdir -p cache/lib/firmware/${DN}/
+        if [ -e /lib/firmware/${1} ]; then
+            p_begin "Copying wireless firmware from this system ... "
+            cp --archive /lib/firmware/${1} cache/lib/firmware/${DN}/
+            p_end "ok"
+        fi
+        p_begin "Downloading wireless firmware ... "
+        rsync --archive --checksum \
+            rsync://updates.laptop.org/${BUILD}/root/lib/firmware/${1} \
+            cache/lib/firmware/${DN}
+        p_end "ok"
+    fi
+}
+
+function get_wireless_firmware_8388 {
+    get_wireless_firmware libertas/usb8388_olpc.bin
+}
+
+function get_wireless_firmware_8686 {
+    get_wireless_firmware libertas/sd8686_v9.bin
+    get_wireless_firmware libertas/sd8686_v9_helper.bin
+}
+
+function get_wireless_firmware_8787 {
+    get_wireless_firmware mrvl/sd8787_uapsta.bin
+}
+
+if [ $C = yes ]; then
+    p_informational "Getting XO-1 files ... "
+    get_kernel ${C_KERNEL} ${C_BUILD} ${C_MODULES} ${C_FIRMWARE}
+    get_wireless_firmware_8388
+fi
+if [ $D = yes ]; then
+    p_informational "Getting XO-1.5 files ... "
+    get_kernel ${D_KERNEL} ${D_BUILD} ${D_MODULES} ${D_FIRMWARE}
+    get_wireless_firmware_8686
+fi
+if [ $E = yes ]; then
+    p_informational "Getting XO-1.75 files ... "
+    get_kernel ${E_KERNEL} ${E_BUILD} ${E_MODULES} ${E_FIRMWARE}
+    get_wireless_firmware_8686
+fi
+if [ $F = yes ]; then
+    p_informational "Getting XO-4 files ... "
+    get_kernel ${F_KERNEL} ${F_BUILD} ${F_MODULES} ${F_FIRMWARE}
+    get_wireless_firmware_8686
+    get_wireless_firmware_8787
+fi
+
+if [ $C = yes -o $D = yes ]; then
+    # download tiny core extension
+    cat <<EOF > cache/TCZs_x86/tce/onboot.lst
+wifi.tcz
+iw.tcz
+wireless_tools.tcz
+wpa_supplicant.tcz
+openssl-1.0.0.tcz
+libnl.tcz
+libiw.tcz
+libnl1.tcz
+tar.tcz
+parted.tcz
+rsync.tcz
+popt.tcz
+lynx.tcz
+gzip.tcz
+coreutils.tcz
+acl.tcz
+attr.tcz
+libattr.tcz
+gmp.tcz
+libcap.tcz
+diffutils.tcz
+findutils.tcz
+inetutils.tcz
+readline.tcz
+usb-utils.tcz
+libusb.tcz
+pci-utils.tcz
+libpci.tcz
+util-linux.tcz
+nano.tcz
+wget.tcz
+ncurses-common.tcz
+ncurses.tcz
+ncurses-utils.tcz
+EOF
+    if [ $GUI = yes ]; then
+        cat <<EOF >> cache/TCZs_x86/tce/onboot.lst
+Xlibs.tcz
+Xorg-7.6-bin.tcz
+Xorg-7.6-lib.tcz
+Xorg-7.6.tcz
+Xorg-fonts.tcz
+udev-lib.tcz
+udev-extra.tcz
+udev-keymap.tcz
+kmaps.tcz
+alsa.tcz
+libasound.tcz
+alsa-config.tcz
+depmod.tcz
+squashfs-tools-4.x.tcz
+flit_xo.tcz
+ethtool.tcz
+bash.tcz
+expat2.tcz
+liblzma.tcz
+libxml2.tcz
+mirrors.tcz
+xf86-video-geode.tcz
+xf86-video-chrome.tcz
+Xprogs.tcz
+wbar.tcz
+flwm_topside_xo.tcz
+fontconfig.tcz
+pixman.tcz
+graphics-libs-1.tcz
+fltk-1.1.10.tcz
+bzip2-lib.tcz
+fox.tcz
+xfe-common.tcz
+xfe.tcz
+xfi.tcz
+xfv.tcz
+xfw.tcz
+xo-pm.tcz
+EOF
+    fi
+fi
+
+if [ $E = yes -o $F = yes ]; then
+    cat <<EOF > cache/TCZs_arm/tce/onboot.lst
+wifi.tcz
+wireless_tools.tcz
+wpa_supplicant.tcz
+openssl-1.0.0.tcz
+libnl.tcz
+libiw.tcz
+tar.tcz
+popt.tcz
+nano.tcz
+lynx.tcz
+coreutils.tcz
+libiconv.tcz
+gmp.tcz
+diffutils.tcz
+findutils.tcz
+inetutils.tcz
+usbutils.tcz
+libusb.tcz
+pciutils.tcz
+wget.tcz
+ncurses-common.tcz
+ncurses.tcz
+ncurses-utils.tcz
+rsync.tcz
+EOF
+    if [ $GUI = yes ]; then
+        cat <<EOF >> cache/TCZs_arm/tce/onboot.lst
+expat2.tcz
+pixman.tcz
+Xorg-7.6-lib.tcz
+Xorg-7.6.tcz
+alsa.tcz
+alsa-utils.tcz
+alsa-plugins.tcz
+libasound.tcz
+libasound-bin.tcz
+bzip2-lib.tcz
+bzip2.tcz
+mirrors.tcz
+fontconfig.tcz
+popt.tcz
+Xlibs.tcz
+Xprogs.tcz
+fltk-1.1.10.tcz
+freetype.tcz
+imlib2.tcz
+libjpeg.tcz
+libpng.tcz
+gnutls.tcz
+pcre.tcz
+imlib2-tools.tcz
+squashfs-tools-4.x.tcz
+libgcrypt.tcz
+nettle.tcz
+p11-kit.tcz
+libtasn1.tcz
+libgpg-error.tcz
+wbar.tcz
+flwm_topside_xoa.tcz
+flit_xoa.tcz
+bash.tcz
+xo-pm-a.tcz
+mirrors.tcz
+EOF
+    fi
+
+fi
+
+if [ $C = yes -o $D = yes ]; then
+    p_begin "Checking x86 extensions ... "
+    base=http://repo.tinycorelinux.net/${CORE_VERSION}
+    uoc=http://ftp.cc.uoc.gr/mirrors/linux/TinyCore_for_XO1/TC-XO_sources
+    cache=cache/TCZs_x86/tce/optional/
+    flags="-q -c -P $cache"
+    for file in $(<cache/TCZs_x86/tce/onboot.lst); do
+        if [ ! -f cache/TCZs_x86/tce/optional/$file ]; then
+            wget ${flags} ${base}/x86/tcz/$file || \
+                wget ${flags} ${uoc}/$file
+            wget ${flags} ${base}/x86/tcz/$file.md5.txt || \
+                wget ${flags} ${uoc}/$file.md5.txt
+            wget ${flags} ${base}/x86/tcz/$file.dep || \
+                wget ${flags} ${uoc}/$file.dep || true
+            p_end "got $file"
+        else
+            if [ $CACHE = no ]; then
+                rm -f $cache/$file.md5.txt
+                wget ${flags} ${base}/x86/tcz/$file.md5.txt || \
+                    wget ${flags} ${uoc}/$file.md5.txt
+                if [ "$(cat $cache/$file.md5.txt | cut -f 1 -d ' ')" \
+                    != "$(md5sum $cache/$file | cut -f 1 -d ' ')" ]; then
+                    rm -f cache/TCZs_x86/tce/optional/$file{,.dep}
+                    wget ${flags} ${base}/x86/tcz/$file || \
+                        wget ${flags} ${uoc}/$file
+                    wget ${flags} ${base}/x86/tcz/$file.dep \
+                        wget ${flags} ${uoc}/$file.dep || true
+                    p_end "updated $file"
+                fi
+            fi
+        fi
+    done
+    p_end "ok"
+fi
+
+if [ $E = yes -o $F = yes ]; then
+    p_begin "Checking armv6/armv7 extensions ... "
+    flags="-q -c -P cache/TCZs_arm/tce/optional/"
+    base=http://repo.tinycorelinux.net/${CORE_VERSION}
+    uoc=http://ftp.cc.uoc.gr/mirrors/linux/TinyCore_for_XO1/TC-XO_sources
+    for file in $(<cache/TCZs_arm/tce/onboot.lst); do
+        if [ ! -f cache/TCZs_arm/tce/optional/$file ]; then
+            wget ${flags} ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file || \
+                wget ${flags} ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file || \
+                wget ${flags} ${uoc}/$file
+            wget ${flags} ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file.md5.txt || \
+                wget ${flags} ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file.md5.txt || \
+                wget ${flags} ${uoc}/$file.md5.txt
+            wget ${flags} ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file.dep || \
+                wget ${flags} ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file.dep || \
+                wget ${flags} ${uoc}/$file.dep || true
+            p_end "got $file"
+        else
+            if [ $CACHE = no ]; then
+                wget -q -c -P /tmp/ ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file.md5.txt || \
+                    wget -q -c -P /tmp/ ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file.md5.txt || \
+                    wget -q -c -P /tmp/ ${uoc}/$file.md5.txt
+                if [ "$(cat /tmp/$file.md5.txt)" != \
+                    "$(cat cache/TCZs_arm/tce/optional/$file.md5.txt)" ]; then
+                    rm -f cache/TCZs_arm/tce/optional/"$file"*
+                    wget ${flags} ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file || \
+                        wget ${flags} ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file || \
+                        wget ${flags} ${uoc}/$file
+                    wget ${flags} ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file.md5.txt || \
+                        wget ${flags} ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file.md5.txt || \
+                        wget ${flags} ${uoc}/$file.md5.txt
+                    wget ${flags} ${base}/${CORE_INITRD_ARM_ARCH}/tcz/$file.dep || \
+                        wget ${flags} ${base}/${CORE_FALLBACK_ARM_ARCH}/tcz/$file.dep || \
+                        wget ${flags} ${uoc}/$file.dep || true
+                    p_end "updated $file"
+                fi
+                rm -f /tmp/$file.md5.txt
+            fi
+        fi
+    done
+    p_end "ok"
+fi
+
+# unpack
+p_begin "Unpacking initrd ... "
+if [ $C = yes -o $D = yes ]; then
+    mkdir -p ${TREE_X86}
+    zcat cache/${CORE_INITRD_X86}.gz | \
+        (cd ${TREE_X86} && cpio --extract --make-directories --quiet)
+fi
+if [ $E = yes -o $F = yes ]; then
+    mkdir -p ${TREE_ARM}
+    zcat cache/${CORE_INITRD_ARM}.gz | \
+        (cd ${TREE_ARM} && cpio --extract --make-directories --quiet)
+fi
+p_end "ok"
+
+# modify version
+p_begin "Modifying initrd - version ... "
+if [ -d ${TREE_X86} ]; then
+    cat <<EOF >> ${TREE_X86}/etc/motd
+${VERSION} ${AUTHORS}
+
+EOF
+fi
+if [ -d ${TREE_ARM} ]; then
+    cat <<EOF >> ${TREE_ARM}/etc/motd
+${VERSION} ${AUTHORS}
+
+EOF
+fi
+p_end "ok"
+
+# modify kernel
+p_begin "Modifying initrd - replace kernel ... "
+if [ -d ${TREE_X86} ]; then
+    rm -rf ${TREE_X86}/lib/modules/*-tinycore
+    if [ $C = yes ]; then
+        cp -pr cache/lib/modules/${C_MODULES} ${TREE_X86}/lib/modules/
+    fi
+    if [ $D = yes ]; then
+        cp -pr cache/lib/modules/${D_MODULES} ${TREE_X86}/lib/modules/
+    fi
+    cp -pr cache/lib/firmware ${TREE_X86}/lib/
+    # Make tce "think" we run a TC kernel
+    for x in tce-update tce-load tce-audit; do
+        sed -i 's/\$(uname \-r)/3\.0\.21\-tinycore/' \
+            ${TREE_X86}/usr/bin/$x
+    done
+fi
+if [ -d ${TREE_ARM} ]; then
+    rm -rf ${TREE_ARM}/lib/modules/*
+    if [ $E = yes ]; then
+        cp -pr cache/lib/modules/${E_MODULES} ${TREE_ARM}/lib/modules/
+    fi
+    if [ $F = yes ]; then
+        cp -pr cache/lib/modules/${F_MODULES} ${TREE_ARM}/lib/modules/
+    fi
+    cp -pr cache/lib/firmware ${TREE_ARM}/lib/
+    # Make tce think we are armv6
+    sed -i 's/\"armv7\"/\"armv6\"/' ${TREE_ARM}/etc/init.d/tc-functions
+    # Make TC see our '_a.tcz' extensions as the originals
+    if [ "$TCZLOC" = "device" ]; then
+        patch -d ${TREE_ARM} -p1 < tce-load.patch
+    fi
+    # Make tce "think" we run a TC kernel
+    for x in tce-update tce-load tce-audit; do
+        sed -i 's/\$(uname \-r)/3\.6\.11\-piCore/' \
+            ${TREE_ARM}/usr/bin/$x
+    done
+    # tiny core linux presumes the kernel has not set the system
+    # clock, (ours does), and assumes rtc0 is the correct clock to
+    # use, but rtc0 has no battery backup, so we change to rtc1.
+    sed -i 's/rtc0/rtc1/' ${TREE_ARM}/etc/init.d/tc-config
+    sed -i 's/\-s \&/\-s \-f \/dev\/rtc1 \&/g' ${TREE_ARM}/etc/init.d/tc-config
+fi
+p_end "ok"
+
+# Add xo-specific scripts
+p_begin "Modifying initrd - add OLPC XO specific scripts ... "
+for x in ${TREE_X86} ${TREE_ARM}; do
+    if [ -d $x ]; then
+        cp xo-{backup,restore,server,revert,custom} ${x}/usr/local/bin/
+    fi
+done
+p_end "ok"
+
+# associate with wireless on boot
+if [ ! -z "${ESSID}" ]; then
+    p_begin "Modifying initrd - wireless essid ... "
+    for x in ${TREE_X86} ${TREE_ARM}; do
+        if [ -d $x ]; then
+            cat <<EOF >> ${x}/opt/bootlocal.sh
+
+# --essid ${ESSID}
+/sbin/udevadm settle --timeout=5 --quiet
+for x in wlan0 mlan0; do
+    if [ -e /proc/sys/net/ipv4/conf/\$x ]; then
+        ifconfig \$x up >/dev/null && \\
+        iwlist \$x scan >/dev/null && \\
+        iwconfig \$x essid ${ESSID} && \\
+        /sbin/udhcpc -b -i \$x -x hostname:xo >/dev/null 2>/dev/null
+    fi
+done
+EOF
+        fi
+    done
+    p_end "ok"
+fi
+
+# enable serial shell
+if [ -d ${TREE_X86} ]; then
+    echo "ttyS0::respawn:/sbin/getty -L -n -w -l /bin/sh 115200 ttyS0 vt100" \
+        >> ${TREE_X86}/etc/inittab
+fi
+if [ -d ${TREE_ARM} ]; then
+    echo "ttyS2::respawn:/sbin/getty -L -n -w -l /bin/sh 115200 ttyS2 vt100" \
+        >> ${TREE_ARM}/etc/inittab
+fi
+
+for x in ${TREE_X86} ${TREE_ARM}; do
+    if [ -d $x ]; then
+    cat <<EOF >> ${x}/opt/bootlocal.sh
+# tell serial shell user we are ready
+for x in ttyS0 ttyS2; do
+    grep -qw console=\$x /proc/cmdline && \\
+        echo "press enter for shell" > /dev/\$x 2>/dev/null
+done
+
+grep -qw xo-custom /proc/cmdline && /usr/local/bin/xo-custom
+
+EOF
+
+    # make /dev bindable
+    cat << EOF > ${x}/etc/init.d/rcS
+#!/bin/sh
+# RC Script for Tiny Core Linux
+# (c) Robert Shingledecker 2004-2012
+# (c) Jerry Vonau 2013
+
+# Mount /proc.
+[ -f /proc/cmdline ] || /bin/mount /proc
+
+# Remount rootfs rw.
+mount -o remount,rw /
+
+# make /dev bindable JV
+mount -t tmpfs tmpfs /dev
+mknod /dev/null c 1 3
+mknod /dev/ptmx c 5 2
+mknod /dev/console c  5 1
+mknod /dev/kmsg c 1 11
+mkdir /dev/pts
+mkdir /dev/shm
+
+# Mount system devices from /etc/fstab.
+mount -a
+
+/etc/init.d/tc-config
+EOF
+    fi
+done
+
+# Add TC extension in initrd
+if [ "$TCZLOC" = "initrd" ]; then
+    if [ -d ${TREE_X86} ]; then
+        mkdir -p ${TREE_X86}/tmp/builtin/optional
+        for file in $(<cache/TCZs_x86/tce/onboot.lst); do
+            cp -a cache/TCZs_x86/tce/optional/"$file"* \
+                ${TREE_X86}/tmp/builtin/optional/
+        done
+        cp -a cache/TCZs_x86/tce/onboot.lst ${TREE_X86}/tmp/builtin/
+        # Remove references to the kernel from TC extensions
+        for file in $(ls ${TREE_X86}/tmp/builtin/optional/*.tcz.dep); do
+            sed -i '/KERNEL/d' $file
+        done
+    fi
+    if [ -d ${TREE_ARM} ]; then
+        mkdir -p ${TREE_ARM}/tmp/builtin/optional
+        for file in $(<cache/TCZs_arm/tce/onboot.lst); do
+            cp -a cache/TCZs_arm/tce/optional/"$file"* \
+                ${TREE_ARM}/tmp/builtin/optional/
+        done
+        cp -a cache/TCZs_arm/tce/onboot.lst ${TREE_ARM}/tmp/builtin/
+        # Remove references to the kernel from TC extensions
+        for file in $(ls ${TREE_ARM}/tmp/builtin/optional/*.tcz.dep); do
+            sed -i '/KERNEL/d' $file
+        done
+    fi
+fi
+
+# Further modify initrd if we build a GUI
+if [ $GUI = yes ]; then
+    for x in ${TREE_X86} ${TREE_ARM}; do
+        if [ -d $x ]; then
+            cat <<EOF >> ${x}/opt/bootlocal.sh
+# Increase Atrem font size
+sed -i "s/font: fixed/font: -*-fixed-medium-r-normal--*-160-90-90-c-*-*-*/" \
+    /home/\$USER/.Xdefaults
+
+# start sound
+/usr/local/etc/init.d/alsasound start
+
+# inform about GUI login
+. /etc/init.d/tc-functions
+echo "\${CYAN}To start the GUI, login as user \"tc\" \${NORMAL}" > /dev/console
+
+# Fix game keys
+while [ ! -f /home/\$USER/.xsession ]; do sleep 3 ; done
+sed -i 's/waitforX/sleep\ 5/' /home/\$USER/.xsession
+echo "xmodmap /home/\$USER/.Xmodmap" >> /home/\$USER/.xsession
+EOF
+        fi
+    done
+fi
+
+# A chance to inspect change things
+if [ $INSPECT = yes ]; then
+    echo -e "\\0033[1;34m"
+    echo "You can now inspect and make changes in: "
+    [ -d ${TREE_X86} ] && echo "    $TREE_X86"
+    [ -d ${TREE_ARM} ] && echo "    $TREE_ARM"
+    echo ""
+    echo "When done, exit the subshell and then hit \"enter\" to continue"
+    echo "or any letter and then \"enter\" to stop and cleanup."
+    echo -en "\\0033[0;39m"
+    sh < /dev/tty > /dev/tty || true
+    read CONTINUE
+    if [ "$CONTINUE" != "" ]; then
+        exit 0
+    fi
+fi
+
+# pack
+p_begin "Repacking initrd ... "
+if [ -d ${TREE_X86} ]; then
+    (cd ${TREE_X86} && (find|cpio -o -H newc --quiet|gzip -9 -n >${INIT_X86}))
+    rm -rf ${TREE_X86}
+fi
+if [ -d ${TREE_ARM} ]; then
+    (cd ${TREE_ARM} && (find|cpio -o -H newc --quiet|gzip -9 -n >${INIT_ARM}))
+    rm -rf ${TREE_ARM}
+fi
+p_end "ok"
+
+# make the output filesystem tree
+p_begin "Building output tree ... "
+rm -rf output
+mkdir -p output
+mkdir -p output/boot
+
+if [ $C = yes ] || [ $D = yes ]; then
+    cp ${INIT_X86} output/boot/initrd.x86
+fi
+if [ $E = yes ] || [ $F = yes ]; then
+    cp ${INIT_ARM} output/boot/initrd.arm
+fi
+if [ $C = yes ]; then
+    cp cache/boot/vmlinuz-${C_MODULES} output/boot/vmlinuz.0
+    cp cache/boot/bootfw0.zip output/boot
+fi
+if [ $D = yes ]; then
+    cp cache/boot/vmlinuz-${D_MODULES} output/boot/vmlinuz.1
+    cp cache/boot/bootfw1.zip output/boot
+fi
+if [ $E = yes ]; then
+    cp cache/boot/vmlinuz-${E_MODULES} output/boot/vmlinuz.2
+    cp cache/boot/bootfw2.zip output/boot
+fi
+if [ $F = yes ]; then
+    cp cache/boot/vmlinuz-${F_MODULES} output/boot/vmlinuz.4
+    cp cache/boot/bootfw4.zip output/boot
+fi
+p_end "ok"
+
+if [ "$TCZLOC" = "device" ]; then
+    mkdir -p output/cde/optional
+    if [ $C = yes -o $D = yes ]; then
+        cp -a cache/TCZs_x86/tce/onboot.lst output/cde/XO_x86.lst
+        for file in $(<cache/TCZs_x86/tce/onboot.lst); do
+            cp -a cache/TCZs_x86/tce/optional/"$file"* output/cde/optional/
+        done
+    fi
+    if [ $E = yes -o $F = yes ]; then
+        cp -a cache/TCZs_arm/tce/onboot.lst output/cde/XO_arm.lst
+        sed -i 's/\.tcz/_a\.tcz/g' output/cde/XO_arm.lst
+        for file in $(<cache/TCZs_arm/tce/onboot.lst); do
+            name=${file/.tcz/}
+            cp -a cache/TCZs_arm/tce/optional/$file \
+                output/cde/optional/${name}_a.tcz
+            cp -a cache/TCZs_arm/tce/optional/$file.md5.txt \
+                output/cde/optional/${name}_a.tcz.md5.txt
+            cp -a cache/TCZs_arm/tce/optional/$file.dep \
+                output/cde/optional/${name}_a.tcz.dep || true
+        done
+        # fix ARM tcz dependency names
+        for file in $(ls output/cde/optional/*_a.tcz.dep); do
+            sed -i 's/\.tcz/_a\.tcz/g' $file
+        done
+    fi
+    # Remove references to the kernel from TC extensions
+    for file in $(ls output/cde/optional/*.tcz.dep); do
+        sed -i '/KERNEL/d' $file
+    done
+fi
+
+# prepare customisation
+if [ $CUSTOM = yes ]; then
+    mkdir output/{scripts,bundles}
+    mkdir -p cache/{scripts,bundles}
+    # add scripts if present
+    if [ "$(ls cache/scripts)" != "" ]; then
+        cp cache/scripts/* output/scripts
+    else
+        p_error "There are NO customisation scripts.
+Add them in the cache/scripts folder and run again or
+add them in the \"scripts\" folder of the device.
+"
+    fi
+    # download and add bundles
+    if [ -f customisation_bundles ]; then
+        if [ "$BUNDLES" != "" ]; then
+            p_begin "Checking for XO customisation bundles... "
+            flags="-q -c -P cache/bundles/"
+            for bundle in $(<customisation_bundles); do
+                if [ ! -f cache/bundles/$bundle ]; then
+                    wget ${flags} $BUNDLES/$bundle
+                    p_end "got $bundle"
+                fi
+            done
+        fi
+        for bundle in $(<customisation_bundles); do
+            if [ -f cache/bundles/$bundle ]; then
+                cp cache/bundles/$bundle output/bundles
+            else
+                p_error "The $bundle activity does not exist in cache/bundles.
+Please add it and run mktinycorexo again"
+                exit 1
+            fi
+        done
+        p_end "ok"
+    else
+        p_error "There is no customisation bundle list.
+Please make a customisation_bundles file or
+add the xo activities in the \"bundles\" folder of the device
+"
+    fi
+fi
+
+p_begin "Adding Open Firmware boot script ... "
+cat << EOF > output/boot/olpc.fth
+\ olpc.fth
+visible
+.( -- Tiny Core Linux boot script for Open Firmware    ) cr
+.(    by quozl@laptop.org, ${VERSION}               -- ) cr cr
+
+\ translate a bundle suffix string to an architecture tag string
+: b>a  ( bundle$ -- architecture$ )
+   drop c@ case
+      [char] 0  of  " x86" exit  endof
+      [char] 1  of  " x86" exit  endof
+      [char] 2  of  " arm" exit  endof
+      [char] 4  of  " arm" exit  endof
+   endcase
+;
+
+\ translate a bundle suffix string to an serial terminal tag string
+: b>s  ( bundle$ -- serialterm$ )
+   drop c@ case
+      [char] 0  of  " ttyS0" exit  endof
+      [char] 1  of  " ttyS0" exit  endof
+      [char] 2  of  " ttyS2" exit  endof
+      [char] 4  of  " ttyS2" exit  endof
+   endcase
+;
+
+[ifndef] bundle-suffix$
+: bundle-suffix$
+   " model" " /" find-package drop get-package-property 2drop c@
+   case
+      [char] C  of  " 0" exit  endof
+      [char] D  of  " 1" exit  endof
+      " 2" exit
+   endcase
+;
+[then]
+
+\ set macros
+bundle-suffix$     " MACHINE"      \$set-macro
+bundle-suffix$ b>a " ARCHITECTURE" \$set-macro
+bundle-suffix$ b>s " SERIALTERM"   \$set-macro
+
+\ set kernel command line
+" ${CMDLINE}"                           expand$ to boot-file
+
+\ choose initramfs
+" last:\boot\initrd.\${ARCHITECTURE}"   expand$ to ramdisk
+
+\ choose kernel
+" last:\boot\vmlinuz.\${MACHINE}"       expand$ to boot-device
+
+cr
+boot
+EOF
+
+# cleanup
+rm -rf $(pwd)/tmp/
+p_end "ok"
+
+# create .zd file
+if [ $ZD = yes ]; then
+    echo "Tiny Core Linux for OLPC XO, ${VERSION}" > output/boot/olpc_build
+    IMAGE=output.img
+    MOUNTPOINT=output.mnt
+    SIZE=$(du --summarize --bytes output|cut -f1)
+    SIZE=$(( ( $SIZE * 110 / 100 ) / 1024 ))
+    dd if=/dev/zero of=$IMAGE bs=1024 count=$SIZE >/dev/null 2>/dev/null
+    mkfs.fat $IMAGE
+    LOOP=$(losetup --show --find $IMAGE)
+    mkdir -p $MOUNTPOINT
+    mount $LOOP $MOUNTPOINT
+    rsync --archive output/* $MOUNTPOINT/
+    umount $MOUNTPOINT
+    rmdir $MOUNTPOINT
+    until losetup -d $LOOP; do sleep 0.1; done
+    # requires olpc-os-builder package to be installed
+    /usr/libexec/olpc-os-builder/zhashfs 0x20000 sha256 $IMAGE tc.zsp tc.zd
+    rm -f $IMAGE
+    exit 0
+fi
+
+# copy to drive
+if [ ! -z ${DEVICE} ]; then
+    p_begin "Copying to drive ... "
+    mount ${DEVICE} /mnt
+    rsync --archive --checksum --delete output/* /mnt/
+    umount /mnt/
+    p_end "ok"
+    exit 0
+fi

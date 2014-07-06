@@ -1,0 +1,119 @@
+How to create a Tiny Core Linux bootable USB drive
+for customising an installation of OLPC OS on an XO.
+
+
+Build Tiny Core Linux as described in HOWTO, but add the option
+--xo-custom, which will enable customisation.
+
+There are two methods of adding activities and scripts -- adding them
+during creation of the bootable USB drive, or adding them afterwards:
+
+*   during creation of the bootable USB drive,
+
+    With a text editor generate the customisation_bundles file and add
+    a list of the activities and bundles to be added.  To have your
+    customisations included at building time, place Sugar activities
+    in the directory cache/bundles/ or provide a URL to download the
+    files from using the --bundles_url option of the mktinycorexo
+    script.  Place additional commands in the directory
+    cache/scripts/.
+
+*   after creation of the bootable USB drive,
+
+    You can add or change your customisations directly to the USB
+    drive in /bundles and /scripts.
+
+
+When booted from the USB drive, the target XO will do the four
+customisation steps below in the context of a chroot, with the USB
+drive will be mounted at /media.
+
+1.  each Sugar activity bundle, each content bundle, and each boot
+animation customisation bundle, found in the directory /bundles/, will
+be automatically installed, see
+http://wiki.laptop.org/go/Customization_stick for how to assemble the
+/bundles/ directory.
+
+2.  a script named asroot in the directory /scripts/ will be run as
+root,
+
+3.  a script named asolpc in the directory /scripts/ will be run as
+user olpc,
+
+4.  if files yum.conf and yum.cmd in the directory /scripts/ are
+present, then the command in yum.cmd will be run as user root, using
+the yum.conf configuration file,
+
+After completion, you will be asked to "Press enter to shutdown and
+then remove USB drive".  Once the power is off, you can remove the USB
+drive.
+
+Example asroot:
+-----------------
+#!/bin/bash
+
+# set the time zone to Canada/Central
+cp /usr/share/zoneinfo/Canada/Central /etc/localtime
+
+# copy some file to the XO
+# cp /media/<file> /path/on/xo
+-----------------
+
+Example asolpc:
+-----------------
+#!/bin/bash
+
+# copy a file from USB drive into Documents
+cp /media/howto.txt ~/Documents/
+
+# make a change to a file
+# sed -i -e '/replacethis/withthis/' /some/file
+
+# set language default
+cat << EOF > ~/.i18n
+LANG=en_AU.UTF-8
+LC_ALL=en_AU.UTF-8
+LANGUAGE=en_GB.utf8:en_US.utf8
+EOF
+-----------------
+
+Example yum setup:
+
+Provide /scripts/yum.conf, /scripts/yum.cmd, and a configured yum repo
+and yum will be executed with -y -c pointing to /scripts/yum.conf and
+/scripts/yum.cmd as the arguments. The yum.conf file would use
+file:///media/<path/to/repo>
+
+The example below shows how to install the xs-config-xo package.
+
+yum.cmd:
+-----------------
+install xs-config-xo
+-----------------
+
+yum.conf:
+-----------------
+[main]
+cachedir=/var/cache/yum
+keepcache=1
+debuglevel=2
+exactarch=1
+obsoletes=1
+gpgcheck=0
+plugins=0
+installonly_limit=3
+
+# disables /etc/yum.repos.d
+reposdir=/tmp
+
+# keep the log file
+logfile=/home/olpc/.sugar/default/yum.log
+
+# repository on the USB drive
+[media.repo]
+name=flash
+baseurl=file:///media/xs-repo/armhfp/18/
+enabled=1
+gpgcheck=0
+gpgkey=
+-----------------

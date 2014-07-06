@@ -1,0 +1,71 @@
+Announcing a build of Tiny Core Linux for the OLPC XO.
+
+This is useful for testing, diagnosis, and recovery of filesystems on
+an unlocked XO.
+
+My thanks to George Hunt, Yioryos Asprobounitis and Jerry Vonau for
+the contributions.
+
+Features:
+
+- runs on XO-1, XO-1.5, XO-1.75, or XO-4,
+
+- configured for a single root shell in text mode, with alternate
+  consoles available for login,
+
+- based on Core 4.7.7, uses the OLPC kernel from 13.2.0-8, and
+  includes latest signed Open Firmware versions for automatic upgrade,
+
+- includes wireless firmware for each laptop, and wireless
+  tools from Tiny Core Linux.
+
+
+Downloads:
+
+http://dev.laptop.org/~quozl/tinycore/
+3ad809ddb06fefa75b7c3c8a28520d11  core-4.7.7-xo-2013-06-25.zip
+
+
+Instructions:
+
+a.  unzip the file on a USB drive or SD card,
+
+b.  ensure the XO is unlocked,
+
+c.  boot from the media.
+
+
+Changes since core-4.7.6-xo-2013-05-24.zip:
+
+- add rsync,
+
+- add xo-backup, xo-restore, xo-server, xo-revert tools,
+
+- show extension names as they are loaded,
+
+- fix missing serial port consoles, and add a prompt,
+
+- support older firmware versions that lack bundle-suffix$ ,
+
+- list contributors.
+
+
+Known bugs:
+
+- spurious messages from tar before the date is set,
+
+- spurious messages from udevadm, an upstream problem, missing --quiet,
+
+- associates automatically with a network named "qz", a test escape,
+
+
+References:
+
+1.  Tiny Core Linux
+http://www.tinycorelinux.com/
+
+2.  mktinycorexo script
+http://dev.laptop.org/~quozl/mktinycorexo/
+
+3.  mktinycorexo script git repository
+git clone http://dev.laptop.org/~quozl/mktinycorexo/.git
